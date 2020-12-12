@@ -2,12 +2,12 @@ package main
 
 import (
 	"github.com/gordonklaus/portaudio"
-  "github.com/mjibson/go-dsp/fft"
+  // "github.com/mjibson/go-dsp/fft"
   "github.com/joho/godotenv"
 
 	"time"
   "fmt"
-  "math"
+  // "math"
   "os"
 	"os/signal"
   "strconv"
@@ -58,7 +58,11 @@ func main() {
 type echo struct {
 	*portaudio.Stream
 	buffer []float32
+	noiseMean []float64
+	SampleRate  int
 	i      int
+	step   int
+	hm   int
 }
 
 func newEcho(delay time.Duration) *echo {
@@ -67,210 +71,119 @@ func newEcho(delay time.Duration) *echo {
 	p := portaudio.LowLatencyParameters(h.DefaultInputDevice, h.DefaultOutputDevice)
 	p.Input.Channels = 1
 	p.Output.Channels = 1
-	e := &echo{buffer: make([]float32, int(p.SampleRate*delay.Seconds()))}
+	// e := &echo{buffer: make([]float32, int(p.SampleRate))}
+	e := &echo{buffer: make([]float32, int(p.SampleRate * delay.Seconds()) )}
 	e.Stream, err = portaudio.OpenStream(p, e.processAudio)
+	e.SampleRate = int(p.SampleRate)
+	e.noiseMean = make([]float64, 0)
+	e.hm = floorDiv(int(e.SampleRate * 20), 1000)
+
 	chk(err)
 	return e
 }
 
-func (e * echo) max(cmlx []complex128) (float64, int) {
-  n := float64(len(cmlx))
-  pos := 0
-  var max float64 = 0.0
-  for i, c := range cmlx {
-    r := real(c)
-    im := imag(c)
+func sum(arr []float32) float32 {
+	var s float32 = 0.0
 
-    v := math.Sqrt(r * r + im * im)
-    if i == 0 {
-      v = v/n
-    } else {
-      v = v * 2 / n
-    }
+	for _, v := range arr {
+		s = s + v
+	}
 
-    if v > max {
-      max = v
-      pos = i
-    }
-
-  }
-
-  return max, pos
+	return s
 }
 
-func (e * echo) most(cmlx []complex128) ([]int) {
-  n := float64(len(cmlx))
-  arr := make([]int, 0)
-  var max float64 = 0.0
-  for i, c := range cmlx {
-    v := e.mod(c)
-    if i == 0 {
-      v = v/n
-    } else {
-      v = v * 2 / n
-    }
+func sum64(arr []float64) float64 {
+	var s float64 = 0.0
 
-    if v > max {
-      max = v
-    }
-  }
+	for _, v := range arr {
+		s = s + v
+	}
 
-
-  for i, c := range cmlx {
-    v := e.mod(c)
-
-    if i == 0 {
-      v = v/n
-    } else {
-      v = v * 2 / n
-    }
-
-    if v > max * mostFactor  {
-      arr = append(arr, i)
-    }
-  }
-
-  return arr
+	return s
 }
 
-
-
-func (e * echo) freq(cmlx []complex128) []float64 {
-  n := float64(len(cmlx))
-  arr := make([]float64, len(cmlx))
-  for i, c := range cmlx {
-    r := real(c)
-    im := imag(c)
-
-    v := math.Sqrt(r * r + im * im)
-    if i == 0 {
-      v = v/n
-    } else {
-      v = v * 2 / n
-    }
-    arr[i] = v
-  }
-
-  return arr
-}
-
-func (e * echo) mod(c complex128) float64 {
-  return math.Sqrt(real(c) * real(c) + imag(c) * imag(c))
-}
-
-func (e * echo) isNoise(cmlx []complex128) bool {
-  total := 0.0
-  for _, c := range cmlx {
-    m := e.mod(c)
-
-    total += m
-  }
-
-  avg := total/float64(len(cmlx))
-
-  fx := 0.0
-  for _, c := range cmlx {
-    m := e.mod(c)
-
-    fx += (m - avg) * (m - avg)
-  }
-
-
-  if fx < 0.0001 {
-    return true
-  }
-
-  return false
-}
-
-func inArr(arr []int, m int) bool {
-  for _, v := range arr {
-    if m == v {
-      return true
-    }
-  }
-
-  return false
-}
-
-func isNoise(arr []int, n int) bool {
-  newArr := make([]int, 0)
-
-  for _, v := range arr {
-    if v != 0 && v < n - 5 && v > 5 {
-      newArr = append(newArr, v)
-    }
-  }
-
-  if len(newArr) > 0 {
-    return false
-  }
-
-  return false
-}
-
-func (e * echo) copy(cmlx []complex128) []complex128 {
-  tmp := make([]complex128, 0)
-
-  for _, v := range cmlx {
-    tmp = append(tmp, v)
-  }
-
-  return tmp
-}
-
-var noise []complex128 = make([]complex128, 0)
-
-func (e * echo) filter(cmlx []complex128) []complex128 {
-  pos := e.most(cmlx)
-  flag := isNoise(pos, len(cmlx))
-  // max, _ := e.max(cmlx)
-  if (e.isNoise(cmlx)) {
-    noise = e.copy(cmlx)
-  }
-  if !flag {
-    // fmt.Println(pos)
-  }
-
-  result := make([]complex128, len(cmlx))
-  for i, c := range cmlx {
-    if i <= 10 && i > len(cmlx) - 10 - 1 {
-      result[i] = 0
-    } else {
-      result[i] = c
-    }
-  }
-
-  return result
-}
-
-func (e * echo) inverse(cmlx []complex128) []float64 {
-  t := make([]float64, 0)
-  for _, c := range cmlx {
-    t = append(t, real(c))
-  }
-
-  return t
-}
 
 func (e *echo) processAudio(in, out []float32) {
+	// fmt.Println(len(out))
+	// oldBuffer := make([]float64, len(e.buffer))
+	//
+	// for i, v := range e.buffer {
+	// 	oldBuffer[i] = float64(v)
+	// }
+
+	// newBuffer := ReduceNoise(oldBuffer, e.SampleRate)
+	// oldBuffer := make([]float64, len(e.buffer))
+	//
+	// for i, v := range e.buffer {
+	// 	oldBuffer[i] = float64(v)
+	// }
+	//
+	// newBuffer := ReduceNoise(oldBuffer, e.SampleRate, noiseMean)
+
   tmpOut := make([]float64, len(out))
+	indexList := make([]int, 0)
 	for i := range out {
-    v := float64(e.buffer[e.i])
+		indexList = append(indexList, e.i)
+		v := float64(e.buffer[e.i])
     tmpOut[i] = v
 		e.buffer[e.i] = in[i]
 		e.i = (e.i + 1) % len(e.buffer)
+		// fmt.Println(e.i)
 	}
 
-  cmplxArr := fft.FFTReal(tmpOut)
-  newArr := e.filter(cmplxArr)
-  // fmt.Println(newArr)
-  ifftResult := fft.IFFT(newArr)
-  newXX := e.inverse(ifftResult)
+	// fmt.Print	ln(len(in))
 
-  for i := range out {
-    out[i] = float32(float64(scale) * newXX[i])
-  }
+	// fmt.Println(sum(in))
+
+	if sum(in) !=  0 {
+		e.step = e.step + len(in)
+	}
+
+	if (e.step >= e.hm) && len(e.noiseMean) == 0 {
+		oldBuffer := make([]float64, len(e.buffer))
+
+		for i, v := range e.buffer {
+			oldBuffer[i] = float64(v)
+		}
+
+		// fmt.Println(oldBuffer[e.i - e.step + 10:])
+
+		// fmt.Println(oldBuffer[e.i:])
+		e.noiseMean = CalNoiseMean(oldBuffer[e.i - e.step + 10:], e.SampleRate)
+		// fmt.Println(e.noiseMean)
+	}
+
+	for i := range out {
+		out[i] = float32(float64(scale) * tmpOut[i])
+	}
+
+	if len(e.noiseMean) > 0 {
+		oldBuffer := make([]float64, len(e.buffer))
+
+		for i, v := range e.buffer {
+			oldBuffer[i] = float64(v)
+		}
+
+		// ReduceNoise(oldBuffer, e.SampleRate, e.noiseMean)
+	// 	// newBuffer := ReduceNoise(oldBuffer, e.SampleRate, e.noiseMean)
+	// 	// fmt.Println(indexList)
+	// 	// fmt.Println(len(oldBuffer), len(newBuffer))
+	//
+	// 	// fmt.Println(len(indexList))
+	//
+	//
+	// 	for i, v := range indexList {
+	// 		if v < len(newBuffer) {
+	// 			fmt.Println("out:", out[i], "org:", e.buffer[v] , "old:", oldBuffer[v], "new:", newBuffer[v])
+	// 			// out[i] = float32(float64(scale) * oldBuffer[v])
+	// 		} else {
+	// 			// out[i] = float32(tmpOut[i])
+	// 		}
+	// 	}
+	// 	// fmt.Println(sum64(oldBuffer), sum64(newBuffer))
+	//
+	// 	return
+	}
 
 }
 
